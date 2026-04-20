@@ -4,6 +4,17 @@ from pathlib import Path
 import json
 
 def read_file(path: str):
+    """Lê um arquivo JSON e retorna seu conteúdo.
+
+    Args:
+        path (str): Caminho do arquivo JSON.
+
+    Returns:
+        list | dict: Conteúdo do JSON convertido para estrutura Python.
+
+    Raises:
+        Exception: Caso o formato do arquivo não seja suportado.
+    """
     if str(path).endswith(".json"):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -12,6 +23,20 @@ def read_file(path: str):
         raise Exception("Formato de arquivo não suportado")
     
 def extract_animals(animal, extracted_animals, visited):
+    """Extrai dados de animais de forma recursiva, incluindo pai e mãe.
+
+    Essa função percorre a estrutura hierárquica do JSON e transforma
+    os dados em formato plano (flat), evitando duplicidade através
+    do controle por identificador.
+
+    Args:
+        animal (dict): Objeto do animal atual.
+        extracted_animals (list): Lista acumuladora dos animais extraídos.
+        visited (set): Conjunto de identificadores já processados.
+
+    Returns:
+        None
+    """
     if not animal: return
     
     if visited is None: visited = set()
@@ -44,12 +69,35 @@ def extract_animals(animal, extracted_animals, visited):
     extract_animals(mother, extracted_animals, visited)
 
 def get_identifier(animal):
+    """Obtém o identificador único de um animal.
+
+    A prioridade é:
+        1. RGD
+        2. RGN
+
+    Args:
+        animal (dict): Objeto do animal.
+
+    Returns:
+        str | None: Identificador do animal ou None se não existir.
+    """
     if not animal:
         return None
     
     return animal.get("Rgd") or animal.get("Rgn")
 
 def process_data(data):
+    """Processa os dados brutos do JSON em um DataFrame estruturado.
+
+    Percorre todos os animais e extrai suas informações,
+    incluindo relações de parentesco.
+
+    Args:
+        data (list): Lista de animais no formato JSON.
+
+    Returns:
+        pandas.DataFrame: DataFrame contendo os dados estruturados.
+    """
     extracted_animals = []
     visited = set()
         
@@ -60,6 +108,22 @@ def process_data(data):
     return df
 
 def clean_data(df):
+    """Realiza limpeza e normalização dos dados.
+
+    Etapas realizadas:
+        - Criação do identificador (RGD ou RGN)
+        - Remoção de registros sem identificador
+        - Conversão e validação de datas
+        - Remoção de datas inválidas
+        - Normalização de nomes
+        - Remoção de duplicidades
+
+    Args:
+        df (pandas.DataFrame): DataFrame bruto.
+
+    Returns:
+        pandas.DataFrame: DataFrame limpo e validado.
+    """
     df["identificador"] = df["RGD"].fillna(df["RGN"])
     df = df[df["identificador"].notna()]
     
@@ -77,6 +141,13 @@ def clean_data(df):
     return df
 
 def database_connection():
+    """Cria a conexão com o banco de dados SQL Server.
+
+    Utiliza SQLAlchemy com driver PyODBC.
+
+    Returns:
+        sqlalchemy.Engine: Engine de conexão com o banco.
+    """
     engine = create_engine(
     "mssql+pyodbc://@PC-RERUM000210/AnimaisDB?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes&TrustServerCertificate=yes"
     )
@@ -85,6 +156,19 @@ def database_connection():
             
 # ================== MAIN ==================
 def main():
+    """Executa o pipeline completo de importação e validação.
+
+    Fluxo:
+        1. Leitura do arquivo JSON
+        2. Processamento dos dados
+        3. Limpeza e normalização
+        4. Inserção na tabela de staging
+        5. Execução da procedure de processamento
+        6. Exibição de divergências (se houver)
+
+    Returns:
+        None
+    """
     file = Path("C:/Users/marhe/OneDrive/Área de Trabalho/Tickets/Repository_Rerum/Ticket_16/ACNB-01-04-2026-11-06-43_-_inscrições__Expozebu_2026.json")
     engine = database_connection()
     
