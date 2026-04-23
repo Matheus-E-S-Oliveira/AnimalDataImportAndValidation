@@ -1,7 +1,9 @@
+from datetime import datetime
 import pandas as pd
 from sqlalchemy import create_engine, text
 from pathlib import Path
 import json
+from openpyxl.styles import PatternFill, Font, Alignment
 
 def read_file(path: str):
     """Lê um arquivo JSON e retorna seu conteúdo.
@@ -154,6 +156,159 @@ def database_connection():
     
     return engine
             
+def export_report_to_excel(result):
+
+    # ==============================
+    # 1. Converter resultado
+    # ==============================
+    data = result.mappings().all()
+    df = pd.DataFrame(data)
+
+    if df.empty:
+        print("Nenhuma divergência encontrada.")
+        return
+    
+
+    # ==============================
+    # 2. Renomear colunas
+    # ==============================
+    df = df.rename(columns={
+        "Identificador": "ID",
+        "nome": "Nome",
+        "DataNascimento_Banco": "Data Nascimento (Banco)",
+        "Sexo_Banco": "Sexo (Banco)",
+        "DataNascimento_Importacao": "Data Nascimento (Importação)",
+        "Sexo_Importacao": "Sexo (Importação)",
+        "Divergencia_DataNascimento": "Divergência Data",
+        "Divergencia_Sexo": "Divergência Sexo",
+        "CamposDivergentes": "Campos Divergentes"
+    })
+
+    # ==============================
+    # 3. Formatação
+    # ==============================
+    df["Data Nascimento (Banco)"] = pd.to_datetime(df["Data Nascimento (Banco)"]).dt.strftime("%d/%m/%Y")
+    df["Data Nascimento (Importação)"] = pd.to_datetime(df["Data Nascimento (Importação)"]).dt.strftime("%d/%m/%Y")
+    df["Campos Divergentes"] = df["Campos Divergentes"].str.replace(";", "", regex=False)
+
+    # ==============================
+    # 4. Estatísticas
+    # ==============================
+    total = len(df)
+    diverg_data = df["Divergência Data"].sum()
+    diverg_sexo = df["Divergência Sexo"].sum()
+
+    resumo = pd.DataFrame({
+        "Métrica": [
+            "Total de Registros com Divergência",
+            "Divergência de Data",
+            "Divergência de Sexo"
+        ],
+        "Valor": [
+            total,
+            diverg_data,
+            diverg_sexo
+        ]
+    })
+
+    # Agrupamento por tipo de divergência
+    estatisticas = df["Campos Divergentes"].value_counts().reset_index()
+    estatisticas.columns = ["Tipo de Divergência", "Quantidade"]
+
+    # ==============================
+    # 5. Exportar Excel
+    # ==============================
+    output_dir = Path("Reports")
+    output_dir.mkdir(exist_ok=True)
+
+    data_atual = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    file_name = output_dir / f"Relatorio_Divergencias_{data_atual}.xlsx"
+
+    with pd.ExcelWriter(file_name, engine="openpyxl") as writer:
+
+        # Aba detalhada
+        df.to_excel(writer, index=False, sheet_name="Detalhado")
+
+        # Aba resumo
+        resumo.to_excel(writer, index=False, sheet_name="Resumo")
+
+        # Aba estatísticas
+        estatisticas.to_excel(writer, index=False, sheet_name="Estatísticas")
+
+        workbook = writer.book
+
+        # ==============================
+        # 6. FORMATAÇÃO DETALHADO
+        # ==============================
+        ws = workbook["Detalhado"]
+        ws.freeze_panes = "A2"
+        
+        headers = [cell.value for cell in ws[1]]
+        col_map = {name: idx for idx, name in enumerate(headers)}
+        
+        header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = Font(bold=True)
+            
+        fill_red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+
+        # Destacar divergências
+        for row in ws.iter_rows(min_row=2):
+
+            diverg_data = row[col_map["Divergência Data"]].value
+            diverg_sexo = row[col_map["Divergência Sexo"]].value
+
+            # 🔴 Data
+            if diverg_data == 1:
+                row[col_map["Data Nascimento (Banco)"]].fill = fill_red
+                row[col_map["Data Nascimento (Importação)"]].fill = fill_red
+
+            # 🔴 Sexo
+            if diverg_sexo == 1:
+                row[col_map["Sexo (Banco)"]].fill = fill_red
+                row[col_map["Sexo (Importação)"]].fill = fill_red
+
+        auto_adjust_column_width(ws)
+        
+        # ==============================
+        # 7. FORMATAÇÃO RESUMO
+        # ==============================
+        ws_resumo = workbook["Resumo"]
+        auto_adjust_column_width(ws_resumo)
+        ws_resumo.freeze_panes = "A2"
+
+        for row in ws_resumo.iter_rows():
+            for cell in row:
+                cell.font = Font(bold=True) if cell.row == 1 else Font()
+                cell.alignment = Alignment(horizontal="center")
+
+        # ==============================
+        # 8. FORMATAÇÃO ESTATÍSTICAS
+        # ==============================
+        ws_est = workbook["Estatísticas"]
+        ws_est.freeze_panes = "A2"
+        auto_adjust_column_width(ws_est)
+
+        for row in ws_est.iter_rows():
+            for cell in row:
+                cell.font = Font(bold=True) if cell.row == 1 else Font()
+                cell.alignment = Alignment(horizontal="center")
+
+    print(f"Relatório gerado com sucesso: {file_name}")
+
+def auto_adjust_column_width(ws):
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+
+        for cell in col:
+            if cell.value:
+                max_length = max(max_length, len(str(cell.value)))
+
+        ws.column_dimensions[col_letter].width = max_length + 2
+
 # ================== MAIN ==================
 def main():
     """Executa o pipeline completo de importação e validação.
@@ -169,7 +324,7 @@ def main():
     Returns:
         None
     """
-    file = Path("C:/Users/marhe/OneDrive/Área de Trabalho/Tickets/Repository_Rerum/Ticket_16/ACNB-01-04-2026-11-06-43_-_inscrições__Expozebu_2026.json")
+    file = Path("C:/Users/marhe/OneDrive/Área de Trabalho/Tickets/Repository_Rerum/Ticket_16/ACNB-01-04-2026-11-06-43_-_inscrições__Expozebu_2026 - Divergente.json")
     engine = database_connection()
     
     data = read_file(file)
@@ -193,10 +348,8 @@ def main():
         result = conn.execute(text("EXEC dbo.sp_Processar_Importacao_Animais"))
         
         if result.returns_rows:
-            disagreements = result.fetchall()
-    
-            for d in disagreements:
-                print(d)
+            export_report_to_excel(result)
+            
     
 if __name__ == "__main__":
     main()
